@@ -6,12 +6,14 @@ import rospy
 import actionlib
 import std_msgs.msg
 import vigir_footstep_planning_msgs.msg
+import footstep_bridge.msg
 
 from rqt_gui_py.plugin import Plugin
 from python_qt_binding.QtCore import Qt, QObject, Slot, QSignalMapper  
 from python_qt_binding.QtGui import QHBoxLayout, QVBoxLayout, QCheckBox, QLineEdit, QPushButton, QDoubleSpinBox
 
 from vigir_footstep_planning_msgs.msg import StepPlanRequest, StepPlanRequestAction, StepPlanRequestGoal, StepPlanRequestResult, PatternParameters, Feet
+from footstep_bridge.msg import ValorSpecificParameters
 from vigir_footstep_planning_lib.execute_step_plan_widget import *
 from vigir_footstep_planning_lib.error_status_widget import *
 from vigir_footstep_planning_lib.parameter_set_widget import *
@@ -130,6 +132,14 @@ class StepInterfaceWidget(QObject):
         self.start_step_index = generate_q_double_spin_box(0, 0, 1000, 0, 1.0)
         add_widget_with_frame(left_settings_vbox, self.start_step_index, "Start Step Index:")
 
+        # Foot Support Mode: note this applied to all of the footsteps
+        self.foot_support_mode_combo_box = QComboBox()
+        self.foot_support_mode_combo_box.addItem("AUTO")
+        self.foot_support_mode_combo_box.addItem("FULL")
+        self.foot_support_mode_combo_box.addItem("FRONT HALF")
+        self.foot_support_mode_combo_box.addItem("REAR HALF")
+        add_widget_with_frame(left_settings_vbox, self.foot_support_mode_combo_box, "Foot Contact Mode:")
+
         # end left column
         settings_hbox.addLayout(left_settings_vbox, 1)
 
@@ -229,6 +239,7 @@ class StepInterfaceWidget(QObject):
 
         # publisher
         self.step_plan_pub = rospy.Publisher("step_plan", StepPlan, queue_size=1)
+        self.contact_mode_pub = rospy.Publisher("change_default_contact_mode", ValorSpecificParameters, queue_size=1, latch=True)
 
         # action clients
         self.step_plan_request_client = actionlib.SimpleActionClient("step_plan_request", StepPlanRequestAction)
@@ -300,14 +311,29 @@ class StepInterfaceWidget(QObject):
         if (self.step_plan_request_client.wait_for_server(rospy.Duration(0.5))):
             self.logger.log_info("Sending footstep plan request...")
 
+            # send a message to switch the default support mode
+            contact_params = ValorSpecificParameters()
+            if (self.foot_support_mode_combo_box.currentText() == "FULL"):
+                contact_params.contact_mode = ValorSpecificParameters.CONTACT_FULL
+            elif (self.foot_support_mode_combo_box.currentText() == "FRONT HALF"):
+                contact_params.contact_mode = ValorSpecificParameters.CONTACT_FRONT_HALF
+            elif (self.foot_support_mode_combo_box.currentText() == "REAR HALF"):
+                contact_params.contact_mode = ValorSpecificParameters.CONTACT_REAR_HALF
+            else:
+                contact_params.contact_mode = ValorSpecificParameters.CONTACT_AUTO
+            self.contact_mode_pub.publish(contact_params)
+
             goal = StepPlanRequestGoal()
             goal.plan_request = request;
             self.step_plan_request_client.send_goal(goal)
 
             if (self.step_plan_request_client.wait_for_result(rospy.Duration(5.0))):
                 self.logger.log_info("Received footstep plan!")
-                self.logger.log(self.step_plan_request_client.get_result().status)
-                self.step_plan_pub.publish(self.step_plan_request_client.get_result().step_plan)
+
+                step_plan = self.step_plan_request_client.get_result()
+
+                self.logger.log(step_plan.status)
+                self.step_plan_pub.publish(step_plan.step_plan)
             else:
                 self.logger.log_error("Didn't received any results. Check communcation!")
         else:
